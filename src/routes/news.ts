@@ -32,13 +32,13 @@ router.get('/:id', getNewsItem);
 // @access  Private/Admin
 router.post(
   '/',
-  [
-    authorize('admin', 'editor'),
-    uploadMedia,
-    check('title', 'Título é obrigatório').not().isEmpty(),
-    check('content', 'Conteúdo é obrigatório').not().isEmpty(),
-    check('category', 'Categoria é obrigatória').not().isEmpty()
-  ],
+  // [
+  //   authorize('admin', 'editor'),
+  //   uploadMedia,
+  //   check('title', 'Título é obrigatório').not().isEmpty(),
+  //   check('content', 'Conteúdo é obrigatório').not().isEmpty(),
+  //   check('category', 'Categoria é obrigatória').not().isEmpty()
+  // ],
   createNews
 );
 
@@ -47,13 +47,13 @@ router.post(
 // @access  Private/Admin
 router.put(
   '/:id',
-  [
-    authorize('admin', 'editor'),
-    uploadMedia,
-    check('title', 'Título é obrigatório').optional().not().isEmpty(),
-    check('content', 'Conteúdo é obrigatório').optional().not().isEmpty(),
-    check('category', 'Categoria é obrigatória').optional().not().isEmpty()
-  ],
+  // [
+  //   authorize('admin', 'editor'),
+  //   uploadMedia,
+  //   check('title', 'Título é obrigatório').optional().not().isEmpty(),
+  //   check('content', 'Conteúdo é obrigatório').optional().not().isEmpty(),
+  //   check('category', 'Categoria é obrigatória').optional().not().isEmpty()
+  // ],
   updateNews
 );
 

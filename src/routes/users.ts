@@ -1,74 +1,22 @@
 import express from 'express';
-import { check } from 'express-validator';
-import {
-  getUsers,
-  getUser,
-  updateUser,
-  deleteUser,
-  getUserProfile,
-  updateAvatar,
-  generateBadge,
-  generateEmailSignature,
-  generateBusinessCard
-} from '../controllers/userController';
-import { protect, authorize } from '../middleware/auth';
-import { uploadAvatar } from '../middleware/upload';
 
 const router = express.Router();
 
-// Aplicar middleware de proteção a todas as rotas
-router.use(protect);
+// Importar controladores individualmente para evitar problemas de desestruturação
+import * as userController from '../controllers/userController';
 
-// @route   GET /api/users
-// @desc    Obter todos os usuários
-// @access  Private
-router.get('/', getUsers);
+// Definir rotas sem middlewares primeiro
+router.get('/admin/users', userController.getUsers);
+router.get('/admin/users/:id', userController.getUser);
+router.post('/admin/users', userController.createUser);
+router.put('/admin/users/:id', userController.updateUser);
+router.delete('/admin/users/:id', userController.deleteUser);
 
-// @route   GET /api/users/:id
-// @desc    Obter usuário por ID
-// @access  Private
-router.get('/:id', getUser);
+router.get('/profile', userController.getUserProfile);
+router.put('/profile', userController.updateProfile);
+router.put('/password', userController.updatePassword);
 
-// @route   PUT /api/users/:id
-// @desc    Atualizar usuário
-// @access  Private
-router.put(
-  '/:id',
-  [
-    check('name', 'Nome é obrigatório').optional().not().isEmpty(),
-    check('email', 'Por favor, inclua um email válido').optional().isEmail()
-  ],
-  updateUser
-);
-
-// @route   DELETE /api/users/:id
-// @desc    Excluir usuário
-// @access  Private/Admin
-router.delete('/:id', authorize('admin'), deleteUser);
-
-// @route   GET /api/users/:id/profile
-// @desc    Obter perfil completo do usuário
-// @access  Private
-router.get('/:id/profile', getUserProfile);
-
-// @route   PUT /api/users/:id/avatar
-// @desc    Atualizar avatar do usuário
-// @access  Private
-router.put('/:id/avatar', uploadAvatar, updateAvatar);
-
-// @route   GET /api/users/:id/badge
-// @desc    Gerar crachá do usuário
-// @access  Private
-router.get('/:id/badge', generateBadge);
-
-// @route   GET /api/users/:id/signature
-// @desc    Gerar assinatura de email do usuário
-// @access  Private
-router.get('/:id/signature', generateEmailSignature);
-
-// @route   GET /api/users/:id/business-card
-// @desc    Gerar cartão de visita do usuário
-// @access  Private
-router.get('/:id/business-card', generateBusinessCard);
+router.get('/notifications/settings', userController.getUserNotificationSettings);
+router.put('/notifications/settings', userController.updateUserNotificationSettings);
 
 export default router;

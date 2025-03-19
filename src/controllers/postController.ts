@@ -1,26 +1,55 @@
 import { Request, Response, NextFunction } from 'express';
-import { validationResult } from 'express-validator';
-import Post from '../models/Post';
-import Comment from '../models/Comment';
-import User from '../models/User';
-import Notification from '../models/Notification';
+import { asyncHandler } from '../middleware/async';
 import ErrorResponse from '../utils/errorResponse';
-import asyncHandler from 'express-async-handler';
+import Post from '../models/Post';
+import User from '../models/User';
+import Department from '../models/Department';
+import Group from '../models/Group';
 
 // @desc    Obter todos os posts
 // @route   GET /api/posts
-// @access  Private
+// @access  Public
 export const getPosts = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  res.status(200).json(res.advancedResults);
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 10;
+  const startIndex = (page - 1) * limit;
+  const endIndex = page * limit;
+  const total = await Post.countDocuments({ isPublished: true });
+
+  const posts = await Post.find({ isPublished: true })
+    .sort({ createdAt: -1 })
+    .skip(startIndex)
+    .limit(limit)
+    .populate('author', 'name avatar position')
+    .populate('comments', 'content author createdAt');
+
+  const pagination = {
+    total,
+    pages: Math.ceil(total / limit),
+    page,
+    limit
+  };
+
+  res.status(200).json({
+    success: true,
+    data: posts,
+    pagination
+  });
 });
 
-// @desc    Obter post por ID
+// @desc    Obter um post específico
 // @route   GET /api/posts/:id
-// @access  Private
+// @access  Public
 export const getPost = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const post = await Post.findById(req.params.id)
-    .populate('author', 'name avatar')
-    .populate('comments');
+    .populate('author', 'name avatar position')
+    .populate({
+      path: 'comments',
+      populate: {
+        path: 'author',
+        select: 'name avatar position'
+      }
+    });
 
   if (!post) {
     return next(new ErrorResponse(`Post não encontrado com id ${req.params.id}`, 404));
@@ -32,21 +61,16 @@ export const getPost = asyncHandler(async (req: Request, res: Response, next: Ne
   });
 });
 
-// @desc    Criar novo post
+// @desc    Criar um novo post
 // @route   POST /api/posts
 // @access  Private
 export const createPost = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
   // Adicionar autor ao corpo da requisição
-  req.body.author = req.user.id;
+  req.body.author = req.user!._id;
 
-  // Adicionar mídia se houver
+  // Processar arquivos de mídia, se houver
   if (req.files && Array.isArray(req.files)) {
-    req.body.media = req.files.map((file: any) => file.path);
+    req.body.media = req.files.map((file: Express.Multer.File) => `/uploads/posts/${file.filename}`);
   }
 
   const post = await Post.create(req.body);
@@ -57,15 +81,10 @@ export const createPost = asyncHandler(async (req: Request, res: Response, next:
   });
 });
 
-// @desc    Atualizar post
+// @desc    Atualizar um post
 // @route   PUT /api/posts/:id
 // @access  Private
 export const updatePost = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
   let post = await Post.findById(req.params.id);
 
   if (!post) {
@@ -73,13 +92,15 @@ export const updatePost = asyncHandler(async (req: Request, res: Response, next:
   }
 
   // Verificar se o usuário é o autor do post
-  if (post.author.toString() !== req.user.id && req.user.role !== 'admin') {
-    return next(new ErrorResponse(`Usuário ${req.user.id} não está autorizado a atualizar este post`, 401));
+  if (post.author.toString() !== req.user!._id.toString() && req.user!.role !== 'admin') {
+    return next(new ErrorResponse('Não autorizado para atualizar este post', 403));
   }
 
-  // Adicionar mídia se houver
+  // Processar arquivos de mídia, se houver
   if (req.files && Array.isArray(req.files)) {
-    req.body.media = req.files.map((file: any) => file.path);
+    // Adicionar novas mídias às existentes
+    const newMedia = req.files.map((file: Express.Multer.File) => `/uploads/posts/${file.filename}`);
+    req.body.media = [...(post.media || []), ...newMedia];
   }
 
   post = await Post.findByIdAndUpdate(req.params.id, req.body, {
@@ -93,7 +114,7 @@ export const updatePost = asyncHandler(async (req: Request, res: Response, next:
   });
 });
 
-// @desc    Excluir post
+// @desc    Excluir um post
 // @route   DELETE /api/posts/:id
 // @access  Private
 export const deletePost = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -104,11 +125,11 @@ export const deletePost = asyncHandler(async (req: Request, res: Response, next:
   }
 
   // Verificar se o usuário é o autor do post
-  if (post.author.toString() !== req.user.id && req.user.role !== 'admin') {
-    return next(new ErrorResponse(`Usuário ${req.user.id} não está autorizado a excluir este post`, 401));
+  if (post.author.toString() !== req.user!._id.toString() && req.user!.role !== 'admin') {
+    return next(new ErrorResponse('Não autorizado para excluir este post', 403));
   }
 
-  await post.remove();
+  await post.deleteOne();
 
   res.status(200).json({
     success: true,
@@ -116,7 +137,7 @@ export const deletePost = asyncHandler(async (req: Request, res: Response, next:
   });
 });
 
-// @desc    Curtir post
+// @desc    Curtir um post
 // @route   POST /api/posts/:id/like
 // @access  Private
 export const likePost = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -127,33 +148,23 @@ export const likePost = asyncHandler(async (req: Request, res: Response, next: N
   }
 
   // Verificar se o post já foi curtido pelo usuário
-  if (post.likes.includes(req.user.id)) {
+  if (post.likes.includes(req.user!._id)) {
     return next(new ErrorResponse('Post já foi curtido', 400));
   }
 
-  post.likes.push(req.user.id);
+  post.likes.push(req.user!._id);
   await post.save();
-
-  // Criar notificação para o autor do post
-  if (post.author.toString() !== req.user.id) {
-    await Notification.create({
-      recipient: post.author,
-      type: 'like',
-      content: `${req.user.name} curtiu seu post`,
-      relatedTo: {
-        type: 'post',
-        id: post._id
-      }
-    });
-  }
 
   res.status(200).json({
     success: true,
-    data: post
+    data: {
+      likes: post.likes.length,
+      isLiked: true
+    }
   });
 });
 
-// @desc    Remover curtida de post
+// @desc    Descurtir um post
 // @route   DELETE /api/posts/:id/like
 // @access  Private
 export const unlikePost = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -164,136 +175,133 @@ export const unlikePost = asyncHandler(async (req: Request, res: Response, next:
   }
 
   // Verificar se o post foi curtido pelo usuário
-  if (!post.likes.includes(req.user.id)) {
-    return next(new ErrorResponse('Post ainda não foi curtido', 400));
+  if (!post.likes.includes(req.user!._id)) {
+    return next(new ErrorResponse('Post não foi curtido', 400));
   }
 
-  // Remover usuário da lista de curtidas
+  // Remover o ID do usuário do array de likes
   post.likes = post.likes.filter(
-    (like) => like.toString() !== req.user.id
+    (like) => like.toString() !== req.user!._id.toString()
   );
-
+  
   await post.save();
 
   res.status(200).json({
     success: true,
-    data: post
+    data: {
+      likes: post.likes.length,
+      isLiked: false
+    }
   });
 });
 
-// @desc    Adicionar comentário a um post
-// @route   POST /api/posts/:id/comments
+// @desc    Obter posts de um usuário específico
+// @route   GET /api/posts/user/:userId
 // @access  Private
-export const addComment = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
+export const getPostsByUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  const user = await User.findById(req.params.userId);
+
+  if (!user) {
+    return next(new ErrorResponse(`Usuário não encontrado com id ${req.params.userId}`, 404));
   }
 
-  const post = await Post.findById(req.params.id);
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 10;
+  const startIndex = (page - 1) * limit;
+  const endIndex = page * limit;
+  const total = await Post.countDocuments({ author: req.params.userId, isPublished: true });
 
-  if (!post) {
-    return next(new ErrorResponse(`Post não encontrado com id ${req.params.id}`, 404));
-  }
+  const posts = await Post.find({ author: req.params.userId, isPublished: true })
+    .sort({ createdAt: -1 })
+    .skip(startIndex)
+    .limit(limit)
+    .populate('author', 'name avatar position')
+    .populate('comments', 'content author createdAt');
 
-  // Criar comentário
-  const comment = await Comment.create({
-    post: post._id,
-    author: req.user.id,
-    content: req.body.content
-  });
-
-  // Adicionar comentário ao post
-  post.comments.push(comment._id);
-  await post.save();
-
-  // Criar notificação para o autor do post
-  if (post.author.toString() !== req.user.id) {
-    await Notification.create({
-      recipient: post.author,
-      type: 'comment',
-      content: `${req.user.name} comentou em seu post`,
-      relatedTo: {
-        type: 'post',
-        id: post._id
-      }
-    });
-  }
-
-  res.status(201).json({
-    success: true,
-    data: comment
-  });
-});
-
-// @desc    Atualizar comentário
-// @route   PUT /api/posts/:id/comments/:commentId
-// @access  Private
-export const updateComment = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
-  let comment = await Comment.findById(req.params.commentId);
-
-  if (!comment) {
-    return next(new ErrorResponse(`Comentário não encontrado com id ${req.params.commentId}`, 404));
-  }
-
-  // Verificar se o comentário pertence ao post
-  if (comment.post.toString() !== req.params.id) {
-    return next(new ErrorResponse(`Comentário não pertence a este post`, 400));
-  }
-
-  // Verificar se o usuário é o autor do comentário
-  if (comment.author.toString() !== req.user.id && req.user.role !== 'admin') {
-    return next(new ErrorResponse(`Usuário ${req.user.id} não está autorizado a atualizar este comentário`, 401));
-  }
-
-  comment = await Comment.findByIdAndUpdate(
-    req.params.commentId,
-    { content: req.body.content },
-    { new: true, runValidators: true }
-  );
+  const pagination = {
+    total,
+    pages: Math.ceil(total / limit),
+    page,
+    limit
+  };
 
   res.status(200).json({
     success: true,
-    data: comment
+    data: posts,
+    pagination
   });
 });
 
-// @desc    Excluir comentário
-// @route   DELETE /api/posts/:id/comments/:commentId
+// @desc    Obter posts de um departamento específico
+// @route   GET /api/posts/department/:departmentId
 // @access  Private
-export const deleteComment = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const comment = await Comment.findById(req.params.commentId);
+export const getPostsByDepartment = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  const department = await Department.findById(req.params.departmentId);
 
-  if (!comment) {
-    return next(new ErrorResponse(`Comentário não encontrado com id ${req.params.commentId}`, 404));
+  if (!department) {
+    return next(new ErrorResponse(`Departamento não encontrado com id ${req.params.departmentId}`, 404));
   }
 
-  // Verificar se o comentário pertence ao post
-  if (comment.post.toString() !== req.params.id) {
-    return next(new ErrorResponse(`Comentário não pertence a este post`, 400));
-  }
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 10;
+  const startIndex = (page - 1) * limit;
+  const endIndex = page * limit;
+  const total = await Post.countDocuments({ department: req.params.departmentId, isPublished: true });
 
-  // Verificar se o usuário é o autor do comentário
-  if (comment.author.toString() !== req.user.id && req.user.role !== 'admin') {
-    return next(new ErrorResponse(`Usuário ${req.user.id} não está autorizado a excluir este comentário`, 401));
-  }
+  const posts = await Post.find({ department: req.params.departmentId, isPublished: true })
+    .sort({ createdAt: -1 })
+    .skip(startIndex)
+    .limit(limit)
+    .populate('author', 'name avatar position')
+    .populate('comments', 'content author createdAt');
 
-  await comment.remove();
-
-  // Remover comentário do post
-  const post = await Post.findById(req.params.id);
-  post.comments = post.comments.filter(
-    (c) => c.toString() !== req.params.commentId
-  );
-  await post.save();
+  const pagination = {
+    total,
+    pages: Math.ceil(total / limit),
+    page,
+    limit
+  };
 
   res.status(200).json({
     success: true,
-    data: {}
+    data: posts,
+    pagination
+  });
+});
+
+// @desc    Obter posts de um grupo específico
+// @route   GET /api/posts/group/:groupId
+// @access  Private
+export const getPostsByGroup = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  const group = await Group.findById(req.params.groupId);
+
+  if (!group) {
+    return next(new ErrorResponse(`Grupo não encontrado com id ${req.params.groupId}`, 404));
+  }
+
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 10;
+  const startIndex = (page - 1) * limit;
+  const endIndex = page * limit;
+  const total = await Post.countDocuments({ group: req.params.groupId, isPublished: true });
+
+  const posts = await Post.find({ group: req.params.groupId, isPublished: true })
+    .sort({ createdAt: -1 })
+    .skip(startIndex)
+    .limit(limit)
+    .populate('author', 'name avatar position')
+    .populate('comments', 'content author createdAt');
+
+  const pagination = {
+    total,
+    pages: Math.ceil(total / limit),
+    page,
+    limit
+  };
+
+  res.status(200).json({
+    success: true,
+    data: posts,
+    pagination
   });
 });

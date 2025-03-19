@@ -1,6 +1,5 @@
 import express from 'express';
-import { check } from 'express-validator';
-import {
+import { 
   getPosts,
   getPost,
   createPost,
@@ -8,88 +7,60 @@ import {
   deletePost,
   likePost,
   unlikePost,
-  addComment,
-  updateComment,
-  deleteComment
+  getPostsByUser,
+  getPostsByDepartment,
+  getPostsByGroup
 } from '../controllers/postController';
-import { protect } from '../middleware/auth';
-import { uploadMedia } from '../middleware/upload';
+import { protect, authorize, checkOwnership } from '../middleware/auth';
+import { processPostMediaUpload } from '../middleware/upload';
+import { validateMongoId } from '../middleware/validate';
+import { logActivity } from '../middleware/activity';
+import Post from '../models/Post';
 
 const router = express.Router();
 
-// Aplicar middleware de proteção a todas as rotas
+// Rotas públicas
+router.get('/', getPosts);
+router.get('/:id', validateMongoId, getPost);
+
+// Rotas protegidas
 router.use(protect);
 
-// @route   GET /api/posts
-// @desc    Obter todos os posts
-// @access  Private
-router.get('/', getPosts);
+// Rotas para posts do usuário
+router.get('/user/:userId', validateMongoId, getPostsByUser);
 
-// @route   GET /api/posts/:id
-// @desc    Obter post por ID
-// @access  Private
-router.get('/:id', getPost);
+// Rotas para posts do departamento
+router.get('/department/:departmentId', validateMongoId, getPostsByDepartment);
 
-// @route   POST /api/posts
-// @desc    Criar um novo post
-// @access  Private
+// Rotas para posts do grupo
+router.get('/group/:groupId', validateMongoId, getPostsByGroup);
+
+// Rotas para criar, atualizar e excluir posts
+router.post('/', createPost);
+
+router.put('/:id', updatePost);
+
+router.delete(
+  '/:id', 
+  validateMongoId, 
+  checkOwnership(Post),
+  logActivity('delete', 'post'),
+  deletePost
+);
+
+// Rotas para curtir/descurtir posts
 router.post(
-  '/',
-  [
-    uploadMedia,
-    check('content', 'Conteúdo é obrigatório').not().isEmpty()
-  ],
-  createPost
+  '/:id/like', 
+  validateMongoId,
+  logActivity('update', 'post'),
+  likePost
 );
 
-// @route   PUT /api/posts/:id
-// @desc    Atualizar post
-// @access  Private
-router.put(
-  '/:id',
-  [
-    uploadMedia,
-    check('content', 'Conteúdo é obrigatório').optional().not().isEmpty()
-  ],
-  updatePost
+router.delete(
+  '/:id/like', 
+  validateMongoId,
+  logActivity('update', 'post'),
+  unlikePost
 );
-
-// @route   DELETE /api/posts/:id
-// @desc    Excluir post
-// @access  Private
-router.delete('/:id', deletePost);
-
-// @route   POST /api/posts/:id/like
-// @desc    Curtir um post
-// @access  Private
-router.post('/:id/like', likePost);
-
-// @route   DELETE /api/posts/:id/like
-// @desc    Remover curtida de um post
-// @access  Private
-router.delete('/:id/like', unlikePost);
-
-// @route   POST /api/posts/:id/comments
-// @desc    Adicionar comentário a um post
-// @access  Private
-router.post(
-  '/:id/comments',
-  [check('content', 'Conteúdo é obrigatório').not().isEmpty()],
-  addComment
-);
-
-// @route   PUT /api/posts/:id/comments/:commentId
-// @desc    Atualizar comentário
-// @access  Private
-router.put(
-  '/:id/comments/:commentId',
-  [check('content', 'Conteúdo é obrigatório').not().isEmpty()],
-  updateComment
-);
-
-// @route   DELETE /api/posts/:id/comments/:commentId
-// @desc    Excluir comentário
-// @access  Private
-router.delete('/:id/comments/:commentId', deleteComment);
 
 export default router;

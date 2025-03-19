@@ -1,103 +1,108 @@
 import express from 'express';
-import { check } from 'express-validator';
-import {
+import { 
   getGroups,
   getGroup,
   createGroup,
   updateGroup,
   deleteGroup,
-  addMember,
-  removeMember,
+  joinGroup,
+  leaveGroup,
+  getGroupMembers,
+  addGroupMember,
+  updateGroupMember,
+  removeGroupMember,
   getGroupPosts,
-  createGroupPost,
-  getGroupFiles
+  getGroupFiles,
+  getGroupEvents
 } from '../controllers/groupController';
-import { protect } from '../middleware/auth';
-import { uploadGroupImage, uploadMedia } from '../middleware/upload';
+import { protect, authorize, checkOwnership } from '../middleware/auth';
+import { processGroupImageUpload } from '../middleware/upload';
+import { validateMongoId } from '../middleware/validate';
+import { logActivity } from '../middleware/activity';
+import Group from '../models/Group';
 
 const router = express.Router();
 
-// Aplicar middleware de proteção a todas as rotas
+// Rotas públicas
+router.get('/', getGroups);
+router.get('/:id', validateMongoId, getGroup);
+
+// Rotas protegidas
 router.use(protect);
 
-// @route   GET /api/groups
-// @desc    Obter todos os grupos
-// @access  Private
-router.get('/', getGroups);
+// Rotas para criar, atualizar e excluir grupos
+router.post('/', createGroup);
 
-// @route   GET /api/groups/:id
-// @desc    Obter grupo por ID
-// @access  Private
-router.get('/:id', getGroup);
+router.put('/:id', updateGroup);
 
-// @route   POST /api/groups
-// @desc    Criar um novo grupo
-// @access  Private
-router.post(
-  '/',
-  [
-    uploadGroupImage,
-    check('name', 'Nome é obrigatório').not().isEmpty(),
-    check('description', 'Descrição é obrigatória').not().isEmpty()
-  ],
-  createGroup
+router.delete(
+  '/:id', 
+  validateMongoId, 
+  checkOwnership(Group),
+  logActivity('delete', 'group'),
+  deleteGroup
 );
 
-// @route   PUT /api/groups/:id
-// @desc    Atualizar grupo
-// @access  Private
+// Rotas para membros do grupo
+router.get(
+  '/:id/members', 
+  validateMongoId,
+  getGroupMembers
+);
+
+router.post(
+  '/:id/members', 
+  validateMongoId,
+  logActivity('create', 'group'),
+  addGroupMember
+);
+
 router.put(
-  '/:id',
-  [
-    uploadGroupImage,
-    check('name', 'Nome é obrigatório').optional().not().isEmpty(),
-    check('description', 'Descrição é obrigatória').optional().not().isEmpty()
-  ],
-  updateGroup
+  '/:id/members/:userId', 
+  validateMongoId,
+  logActivity('update', 'group'),
+  updateGroupMember
 );
 
-// @route   DELETE /api/groups/:id
-// @desc    Excluir grupo
-// @access  Private
-router.delete('/:id', deleteGroup);
+router.delete(
+  '/:id/members/:userId', 
+  validateMongoId,
+  logActivity('delete', 'group'),
+  removeGroupMember
+);
 
-// @route   POST /api/groups/:id/members
-// @desc    Adicionar membro ao grupo
-// @access  Private
+// Rotas para entrar/sair de grupos
 router.post(
-  '/:id/members',
-  [
-    check('userId', 'ID do usuário é obrigatório').not().isEmpty(),
-    check('role', 'Função é obrigatória').not().isEmpty()
-  ],
-  addMember
+  '/:id/join', 
+  validateMongoId,
+  logActivity('update', 'group'),
+  joinGroup
 );
 
-// @route   DELETE /api/groups/:id/members/:userId
-// @desc    Remover membro do grupo
-// @access  Private
-router.delete('/:id/members/:userId', removeMember);
-
-// @route   GET /api/groups/:id/posts
-// @desc    Obter posts do grupo
-// @access  Private
-router.get('/:id/posts', getGroupPosts);
-
-// @route   POST /api/groups/:id/posts
-// @desc    Criar post no grupo
-// @access  Private
-router.post(
-  '/:id/posts',
-  [
-    uploadMedia,
-    check('content', 'Conteúdo é obrigatório').not().isEmpty()
-  ],
-  createGroupPost
+router.delete(
+  '/:id/leave', 
+  validateMongoId,
+  logActivity('update', 'group'),
+  leaveGroup
 );
 
-// @route   GET /api/groups/:id/files
-// @desc    Obter arquivos do grupo
-// @access  Private
-router.get('/:id/files', getGroupFiles);
+// Rotas para obter posts, arquivos e eventos do grupo
+router.get(
+  '/:id/posts', 
+  validateMongoId,
+  getGroupPosts
+);
+
+router.get(
+  '/:id/files', 
+  validateMongoId,
+  getGroupFiles
+);
+
+router.get(
+  '/:id/events', 
+  validateMongoId,
+  getGroupEvents
+);
 
 export default router;

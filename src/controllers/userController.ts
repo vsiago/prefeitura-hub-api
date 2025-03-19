@@ -1,25 +1,47 @@
 import { Request, Response, NextFunction } from 'express';
-import { validationResult } from 'express-validator';
-import User from '../models/User';
-import Department from '../models/Department';
+import { asyncHandler } from '../middleware/async';
 import ErrorResponse from '../utils/errorResponse';
-import asyncHandler from 'express-async-handler';
-import PDFDocument from 'pdfkit';
-import fs from 'fs';
-import path from 'path';
+import User from '../models/User';
+import bcrypt from 'bcryptjs';
 
 // @desc    Obter todos os usuários
-// @route   GET /api/users
-// @access  Private
+// @route   GET /api/users/admin/users
+// @access  Private/Admin
 export const getUsers = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  res.status(200).json(res.advancedResults);
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 10;
+  const startIndex = (page - 1) * limit;
+  const endIndex = page * limit;
+  const total = await User.countDocuments();
+
+  const users = await User.find()
+    .select('-password')
+    .sort({ name: 1 })
+    .skip(startIndex)
+    .limit(limit)
+    .populate('department', 'name');
+
+  const pagination = {
+    total,
+    pages: Math.ceil(total / limit),
+    page,
+    limit
+  };
+
+  res.status(200).json({
+    success: true,
+    data: users,
+    pagination
+  });
 });
 
-// @desc    Obter usuário por ID
-// @route   GET /api/users/:id
-// @access  Private
+// @desc    Obter um usuário específico
+// @route   GET /api/users/admin/users/:id
+// @access  Private/Admin
 export const getUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const user = await User.findById(req.params.id);
+  const user = await User.findById(req.params.id)
+    .select('-password')
+    .populate('department', 'name');
 
   if (!user) {
     return next(new ErrorResponse(`Usuário não encontrado com id ${req.params.id}`, 404));
@@ -31,37 +53,48 @@ export const getUser = asyncHandler(async (req: Request, res: Response, next: Ne
   });
 });
 
-// @desc    Atualizar usuário
-// @route   PUT /api/users/:id
-// @access  Private
+// @desc    Criar um novo usuário
+// @route   POST /api/users/admin/users
+// @access  Private/Admin
+export const createUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  // Processar avatar, se houver
+  if (req.file) {
+    req.body.avatar = `/uploads/avatars/${req.file.filename}`;
+  }
+
+  const user = await User.create(req.body);
+
+  res.status(201).json({
+    success: true,
+    data: user
+  });
+});
+
+// @desc    Atualizar um usuário
+// @route   PUT /api/users/admin/users/:id
+// @access  Private/Admin
 export const updateUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
-  // Verificar se o usuário é o próprio ou um admin
-  if (req.params.id !== req.user.id && req.user.role !== 'admin') {
-    return next(new ErrorResponse(`Usuário ${req.user.id} não está autorizado a atualizar este perfil`, 401));
-  }
-
   let user = await User.findById(req.params.id);
 
   if (!user) {
     return next(new ErrorResponse(`Usuário não encontrado com id ${req.params.id}`, 404));
   }
 
-  // Campos que podem ser atualizados
-  const { name, email, position, phone, bio } = req.body;
+  // Processar avatar, se houver
+  if (req.file) {
+    req.body.avatar = `/uploads/avatars/${req.file.filename}`;
+  }
 
-  // Atualizar campos
-  if (name) user.name = name;
-  if (email) user.email = email;
-  if (position) user.position = position;
-  if (phone) user.phone = phone;
-  if (bio) user.bio = bio;
+  // Se a senha estiver sendo atualizada, criptografá-la
+  if (req.body.password) {
+    const salt = await bcrypt.genSalt(10);
+    req.body.password = await bcrypt.hash(req.body.password, salt);
+  }
 
-  user = await user.save();
+  user = await User.findByIdAndUpdate(req.params.id, req.body, {
+    new: true,
+    runValidators: true
+  }).select('-password');
 
   res.status(200).json({
     success: true,
@@ -69,8 +102,8 @@ export const updateUser = asyncHandler(async (req: Request, res: Response, next:
   });
 });
 
-// @desc    Excluir usuário
-// @route   DELETE /api/users/:id
+// @desc    Excluir um usuário
+// @route   DELETE /api/users/admin/users/:id
 // @access  Private/Admin
 export const deleteUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const user = await User.findById(req.params.id);
@@ -79,7 +112,12 @@ export const deleteUser = asyncHandler(async (req: Request, res: Response, next:
     return next(new ErrorResponse(`Usuário não encontrado com id ${req.params.id}`, 404));
   }
 
-  await user.remove();
+  // Não permitir que o usuário exclua a si mesmo
+  if (user._id.toString() === req.user!._id.toString()) {
+    return next(new ErrorResponse('Não é possível excluir seu próprio usuário', 400));
+  }
+
+  await user.deleteOne();
 
   res.status(200).json({
     success: true,
@@ -87,15 +125,13 @@ export const deleteUser = asyncHandler(async (req: Request, res: Response, next:
   });
 });
 
-// @desc    Obter perfil completo do usuário
-// @route   GET /api/users/:id/profile
+// @desc    Obter perfil do usuário atual
+// @route   GET /api/users/profile
 // @access  Private
 export const getUserProfile = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const user = await User.findById(req.params.id).populate('department');
-
-  if (!user) {
-    return next(new ErrorResponse(`Usuário não encontrado com id ${req.params.id}`, 404));
-  }
+  const user = await User.findById(req.user!._id)
+    .select('-password')
+    .populate('department', 'name');
 
   res.status(200).json({
     success: true,
@@ -103,28 +139,35 @@ export const getUserProfile = asyncHandler(async (req: Request, res: Response, n
   });
 });
 
-// @desc    Atualizar avatar do usuário
-// @route   PUT /api/users/:id/avatar
+// @desc    Atualizar perfil do usuário atual
+// @route   PUT /api/users/profile
 // @access  Private
-export const updateAvatar = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  // Verificar se o usuário é o próprio ou um admin
-  if (req.params.id !== req.user.id && req.user.role !== 'admin') {
-    return next(new ErrorResponse(`Usuário ${req.user.id} não está autorizado a atualizar este avatar`, 401));
+export const updateProfile = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  // Campos que o usuário pode atualizar
+  const fieldsToUpdate = {
+    name: req.body.name,
+    email: req.body.email,
+    avatar: req.body.avatar,
+    phone: req.body.phone,
+    bio: req.body.bio
+  };
+
+  // Processar avatar, se houver
+  if (req.file) {
+    fieldsToUpdate.avatar = `/uploads/avatars/${req.file.filename}`;
   }
 
-  let user = await User.findById(req.params.id);
+  // Remover campos indefinidos
+  Object.keys(fieldsToUpdate).forEach(key => {
+    if (fieldsToUpdate[key] === undefined) {
+      delete fieldsToUpdate[key];
+    }
+  });
 
-  if (!user) {
-    return next(new ErrorResponse(`Usuário não encontrado com id ${req.params.id}`, 404));
-  }
-
-  if (!req.file) {
-    return next(new ErrorResponse('Por favor, envie um arquivo', 400));
-  }
-
-  // Atualizar avatar
-  user.avatar = req.file.path;
-  await user.save();
+  const user = await User.findByIdAndUpdate(req.user!._id, fieldsToUpdate, {
+    new: true,
+    runValidators: true
+  }).select('-password');
 
   res.status(200).json({
     success: true,
@@ -132,150 +175,65 @@ export const updateAvatar = asyncHandler(async (req: Request, res: Response, nex
   });
 });
 
-// @desc    Gerar crachá do usuário
-// @route   GET /api/users/:id/badge
+// @desc    Atualizar senha do usuário atual
+// @route   PUT /api/users/password
 // @access  Private
-export const generateBadge = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const user = await User.findById(req.params.id).populate('department');
+export const updatePassword = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  const user = await User.findById(req.user!._id).select('+password');
 
-  if (!user) {
-    return next(new ErrorResponse(`Usuário não encontrado com id ${req.params.id}`, 404));
+  // Verificar senha atual
+  const isMatch = await user!.matchPassword(req.body.currentPassword);
+
+  if (!isMatch) {
+    return next(new ErrorResponse('Senha atual incorreta', 401));
   }
 
-  // Criar PDF
-  const doc = new PDFDocument();
-  const filename = `badge-${user._id}.pdf`;
-  const filepath = path.join(__dirname, '..', 'temp', filename);
-
-  // Pipe para arquivo temporário
-  doc.pipe(fs.createWriteStream(filepath));
-
-  // Adicionar conteúdo ao PDF
-  doc.fontSize(25).text('CRACHÁ INSTITUCIONAL', { align: 'center' });
-  doc.moveDown();
-  
-  // Adicionar avatar se existir
-  if (user.avatar) {
-    doc.image(user.avatar, {
-      fit: [250, 300],
-      align: 'center'
-    });
-  }
-  
-  doc.moveDown();
-  doc.fontSize(18).text(`Nome: ${user.name}`, { align: 'center' });
-  doc.fontSize(14).text(`Cargo: ${user.position}`, { align: 'center' });
-  
-  if (user.department) {
-    doc.fontSize(14).text(`Departamento: ${user.department.name}`, { align: 'center' });
-  }
-  
-  // Finalizar PDF
-  doc.end();
-
-  // Enviar arquivo
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
-  
-  // Esperar arquivo ser criado
-  setTimeout(() => {
-    const filestream = fs.createReadStream(filepath);
-    filestream.pipe(res);
-    
-    // Limpar arquivo após envio
-    filestream.on('end', () => {
-      fs.unlinkSync(filepath);
-    });
-  }, 1000);
-});
-
-// @desc    Gerar assinatura de email do usuário
-// @route   GET /api/users/:id/signature
-// @access  Private
-export const generateEmailSignature = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const user = await User.findById(req.params.id).populate('department');
-
-  if (!user) {
-    return next(new ErrorResponse(`Usuário não encontrado com id ${req.params.id}`, 404));
+  // Verificar se a nova senha é igual à atual
+  if (req.body.newPassword === req.body.currentPassword) {
+    return next(new ErrorResponse('A nova senha não pode ser igual à atual', 400));
   }
 
-  // Criar HTML da assinatura
-  const signature = `
-    <div style="font-family: Arial, sans-serif; max-width: 500px; border-top: 3px solid #0066cc; padding-top: 10px;">
-      <div style="display: flex;">
-        ${user.avatar ? `<img src="${user.avatar}" alt="Avatar" style="width: 80px; height: 80px; border-radius: 50%; margin-right: 20px;">` : ''}
-        <div>
-          <h3 style="margin: 0; color: #0066cc;">${user.name}</h3>
-          <p style="margin: 5px 0; color: #333;">${user.position}</p>
-          ${user.department ? `<p style="margin: 5px 0; color: #333;">${user.department.name}</p>` : ''}
-          <p style="margin: 5px 0; color: #333;">${user.email}</p>
-          ${user.phone ? `<p style="margin: 5px 0; color: #333;">${user.phone}</p>` : ''}
-        </div>
-      </div>
-      <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
-        <p style="margin: 0; color: #666; font-size: 12px;">Prefeitura Municipal - Todos os direitos reservados</p>
-      </div>
-    </div>
-  `;
-
-  res.setHeader('Content-Type', 'text/html');
-  res.send(signature);
-});
-
-// @desc    Gerar cartão de visita do usuário
-// @route   GET /api/users/:id/business-card
-// @access  Private
-export const generateBusinessCard = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const user = await User.findById(req.params.id).populate('department');
-
-  if (!user) {
-    return next(new ErrorResponse(`Usuário não encontrado com id ${req.params.id}`, 404));
+  // Verificar se a nova senha e a confirmação são iguais
+  if (req.body.newPassword !== req.body.confirmPassword) {
+    return next(new ErrorResponse('As senhas não coincidem', 400));
   }
 
-  // Criar PDF
-  const doc = new PDFDocument({
-    size: [300, 150],
-    margin: 10
+  user!.password = req.body.newPassword;
+  await user!.save();
+
+  res.status(200).json({
+    success: true,
+    message: 'Senha atualizada com sucesso'
   });
-  
-  const filename = `business-card-${user._id}.pdf`;
-  const filepath = path.join(__dirname, '..', 'temp', filename);
+});
 
-  // Pipe para arquivo temporário
-  doc.pipe(fs.createWriteStream(filepath));
+// @desc    Obter configurações de notificação do usuário atual
+// @route   GET /api/users/notifications/settings
+// @access  Private
+export const getUserNotificationSettings = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  const user = await User.findById(req.user!._id).select('notificationSettings');
 
-  // Adicionar conteúdo ao PDF
-  doc.fontSize(14).text('Prefeitura Municipal', { align: 'center' });
-  doc.moveDown(0.5);
-  doc.fontSize(12).text(user.name, { align: 'center' });
-  doc.fontSize(10).text(user.position, { align: 'center' });
-  
-  if (user.department) {
-    doc.fontSize(10).text(user.department.name, { align: 'center' });
-  }
-  
-  doc.moveDown(0.5);
-  doc.fontSize(8).text(`Email: ${user.email}`, { align: 'center' });
-  
-  if (user.phone) {
-    doc.fontSize(8).text(`Telefone: ${user.phone}`, { align: 'center' });
-  }
-  
-  // Finalizar PDF
-  doc.end();
+  res.status(200).json({
+    success: true,
+    data: user!.notificationSettings
+  });
+});
 
-  // Enviar arquivo
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
-  
-  // Esperar arquivo ser criado
-  setTimeout(() => {
-    const filestream = fs.createReadStream(filepath);
-    filestream.pipe(res);
-    
-    // Limpar arquivo após envio
-    filestream.on('end', () => {
-      fs.unlinkSync(filepath);
-    });
-  }, 1000);
+// @desc    Atualizar configurações de notificação do usuário atual
+// @route   PUT /api/users/notifications/settings
+// @access  Private
+export const updateUserNotificationSettings = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  const user = await User.findByIdAndUpdate(
+    req.user!._id,
+    { notificationSettings: req.body },
+    {
+      new: true,
+      runValidators: true
+    }
+  ).select('notificationSettings');
+
+  res.status(200).json({
+    success: true,
+    data: user!.notificationSettings
+  });
 });
